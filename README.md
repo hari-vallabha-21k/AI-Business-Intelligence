@@ -57,7 +57,7 @@ on realistic data without clicking through the UI:
 cd backend
 python scripts/generate_sample_data.py   # messy 3-branch restaurant data
 python scripts/demo.py                   # runs the whole pipeline, prints the result
-pytest                                   # 73 tests
+pytest                                   # 87 tests
 ```
 
 ## Repository

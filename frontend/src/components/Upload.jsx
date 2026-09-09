@@ -19,8 +19,9 @@ export default function Upload({ business, onIngested }) {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
-  async function submit(event) {
-    event.preventDefault()
+  // Re-reading a different sheet is the same upload with one field changed, so
+  // the file is kept in state rather than asking the user to pick it again.
+  async function send(sheet) {
     if (!file) return
     setBusy(true)
     setError(null)
@@ -30,6 +31,7 @@ export default function Upload({ business, onIngested }) {
         branch,
         period_start: periodStart,
         period_end: periodEnd,
+        sheet,
       })
       setResult(uploaded)
       onIngested?.()
@@ -38,6 +40,11 @@ export default function Upload({ business, onIngested }) {
     } finally {
       setBusy(false)
     }
+  }
+
+  function submit(event) {
+    event.preventDefault()
+    send()
   }
 
   return (
@@ -104,15 +111,23 @@ export default function Upload({ business, onIngested }) {
         </button>
       </form>
 
-      {result && <UploadReport result={result} onUpdated={(r) => { setResult(r); onIngested?.() }} />}
+      {result && (
+        <UploadReport
+          result={result}
+          busy={busy}
+          onSheetChange={send}
+          onUpdated={(r) => { setResult(r); onIngested?.() }}
+        />
+      )}
     </div>
   )
 }
 
-function UploadReport({ result, onUpdated }) {
+function UploadReport({ result, busy, onSheetChange, onUpdated }) {
   const issues = [...result.quality_issues].sort(
     (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
   )
+  const source = result.profile?.source
 
   return (
     <div className="space-y-6">
@@ -129,6 +144,8 @@ function UploadReport({ result, onUpdated }) {
           <Stat label="Period start" value={result.period_start ?? 'Not set'} />
           <Stat label="Period end" value={result.period_end ?? 'Not set'} />
         </dl>
+
+        {source && <ScanSummary source={source} busy={busy} onSheetChange={onSheetChange} />}
 
         {result.new_concepts.length > 0 && (
           <p className="mt-4 rounded-md border border-line bg-gray-50 p-3 text-sm">
@@ -172,6 +189,53 @@ function UploadReport({ result, onUpdated }) {
             ))}
           </ul>
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * What the scanner decided about the file itself. Shown because a wrong guess
+ * about the sheet or header row is invisible otherwise -- the numbers would
+ * simply be wrong.
+ */
+function ScanSummary({ source, busy, onSheetChange }) {
+  const sheets = source.sheets_available ?? []
+  return (
+    <div className="mt-4 rounded-md border border-line bg-gray-50 p-3 text-sm">
+      <p className="font-medium">How we read this file</p>
+      <ul className="mt-2 space-y-1 text-muted">
+        {source.sheet_name && <li>Sheet: <strong>{source.sheet_name}</strong></li>}
+        {source.header_row > 1 ? (
+          <li>
+            Column names taken from row <strong>{source.header_row}</strong> —
+            the {source.skipped_top_rows} row(s) above look like a title.
+          </li>
+        ) : (
+          <li>Column names taken from the first row.</li>
+        )}
+        {source.dropped_total_rows > 0 && (
+          <li>{source.dropped_total_rows} total row(s) ignored, not counted as transactions.</li>
+        )}
+        {source.dropped_blank_columns > 0 && (
+          <li>{source.dropped_blank_columns} empty column(s) ignored.</li>
+        )}
+      </ul>
+
+      {sheets.length > 1 && (
+        <label className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-muted">Wrong sheet?</span>
+          <select
+            className="field w-auto py-1"
+            value={source.sheet_name ?? ''}
+            disabled={busy}
+            onChange={(e) => onSheetChange(e.target.value)}
+          >
+            {sheets.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </label>
       )}
     </div>
   )

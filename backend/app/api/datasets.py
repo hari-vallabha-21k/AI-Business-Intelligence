@@ -26,7 +26,7 @@ from app.models import (
 )
 from app.schemas import MappingOut, MappingUpdateBatch, UploadResult
 from app.semantic.concepts import CONCEPTS
-from app.semantic.engine import MappingProposal, map_dataframe, score_column
+from app.semantic.engine import MappingProposal, detect_entity_kind, map_dataframe
 from app.services.ingest import build_records
 from app.services.layer import known_concepts, load_mapping_memory
 from app.services.parsing import FileError, parse_upload
@@ -58,6 +58,7 @@ async def upload_dataset(
     file: UploadFile = File(...),
     dataset_name: str | None = Form(None),
     branch: str | None = Form(None),
+    sheet: str | None = Form(None),
     period_start: date | None = Form(None),
     period_end: date | None = Form(None),
     business: Business = Depends(get_owned_business),
@@ -66,11 +67,13 @@ async def upload_dataset(
     """Run the full pipeline: parse, profile, map, assess, clean, store."""
     content = await file.read()
     try:
-        df = parse_upload(file.filename or "upload", content)
+        df, parse_report = parse_upload(file.filename or "upload", content, sheet=sheet)
     except FileError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     profile, signals = profile_dataframe(df)
+    # Record which sheet and header row were used so the user can correct us.
+    profile["source"] = parse_report.as_dict()
     # First pass without memory to learn the kind, then with this business's
     # confirmed mappings applied.
     kind, _ = map_dataframe(df, signals)
@@ -78,6 +81,9 @@ async def upload_dataset(
     kind, proposals = map_dataframe(df, signals, memory=memory)
 
     issues = assess_file(df, profile, proposals, kind)
+    for note in parse_report.notes:
+        issues.append(_scan_note(note))
+
     blocking = [i for i in issues if i.severity == "critical"]
     if blocking:
         raise HTTPException(status_code=422, detail={"errors": [i.as_dict() for i in blocking]})
@@ -135,6 +141,13 @@ async def upload_dataset(
     db.refresh(version)
 
     return _upload_result(version, new_concepts)
+
+
+def _scan_note(message: str):
+    """Something the workbook scanner decided, surfaced for the user to check."""
+    from app.services.quality import Issue
+
+    return Issue(severity="info", code="file_scan", message=message)
 
 
 def _period_issue(filename: str):
@@ -266,6 +279,7 @@ def confirm_mappings(
             _remember(db, version, mapping.source_column, update.concept)
 
     _rebuild_records(db, version)
+    _recompute_entity_kind(db, version)
     db.commit()
     db.refresh(version)
     return _upload_result(version, [])
@@ -293,6 +307,27 @@ def _remember(
             concept=concept,
         )
     )
+
+
+def _recompute_entity_kind(db: Session, version: DatasetVersion) -> None:
+    """Re-classify a version once the user has confirmed what its columns mean.
+
+    A file we could not classify on upload is stored but inert -- the semantic
+    layer skips unknown data. Confirming the mappings is what makes it live, so
+    the kind has to be derived again here rather than only at upload.
+    """
+    proposals = [
+        MappingProposal(m.source_column, m.concept, m.score, m.confidence.value, "", [])
+        for m in version.mappings
+    ]
+    kind = detect_entity_kind(proposals)
+    if kind == "unknown" or kind == version.entity_kind.value:
+        return
+
+    version.entity_kind = EntityKind(kind)
+    dataset = version.dataset
+    if dataset.entity_kind is EntityKind.UNKNOWN:
+        dataset.entity_kind = EntityKind(kind)
 
 
 def _rebuild_records(db: Session, version: DatasetVersion) -> None:

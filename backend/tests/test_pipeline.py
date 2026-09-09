@@ -52,11 +52,11 @@ def test_normalize_label_is_stable():
 
 def test_csv_and_excel_parse_to_the_same_frame():
     df = pd.DataFrame({"branch": ["A"], "revenue": [100]})
-    csv = parse_upload("f.csv", df.to_csv(index=False).encode())
+    csv, _ = parse_upload("f.csv", df.to_csv(index=False).encode())
 
     buffer = io.BytesIO()
     df.to_excel(buffer, index=False)
-    xlsx = parse_upload("f.xlsx", buffer.getvalue())
+    xlsx, _ = parse_upload("f.xlsx", buffer.getvalue())
 
     pd.testing.assert_frame_equal(csv, xlsx)
 
@@ -67,7 +67,7 @@ def test_csv_and_excel_parse_to_the_same_frame():
         ("data.csv", b"", "empty"),
         ("data.pdf", b"%PDF-1.4", "Excel"),
         ("data.xlsx", b"not really a spreadsheet", "couldn't read"),
-        ("blank.csv", b"a,b\n,\n,\n", "no data rows"),
+        ("blank.csv", b"a,b\n,\n,\n", "data rows"),
     ],
 )
 def test_bad_uploads_get_readable_messages(filename, content, fragment):
@@ -79,7 +79,7 @@ def test_bad_uploads_get_readable_messages(filename, content, fragment):
 
 def test_blank_rows_and_columns_are_dropped():
     raw = b"branch,revenue,\nA,100,\n,,\nB,200,\n"
-    df = parse_upload("f.csv", raw)
+    df, _ = parse_upload("f.csv", raw)
     assert len(df) == 2
     assert list(df.columns) == ["branch", "revenue"]
 

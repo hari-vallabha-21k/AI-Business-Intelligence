@@ -36,7 +36,8 @@ salaries as `₹45,000`, and a February sales file that renames `food_sales` to
 | --- | --- |
 | `app/semantic/concepts.py` | The canonical vocabulary (PRD §13) — 25 concepts every other module speaks in |
 | `app/semantic/engine.py` | Column → concept mapping with confidence scoring (PRD §12, §14) |
-| `app/services/parsing.py` | Excel/CSV reading with user-facing errors (PRD §34) |
+| `app/services/workbook.py` | Workbook scanning — finds the sheet, the header row and the real table |
+| `app/services/parsing.py` | Upload validation and type recovery, user-facing errors (PRD §34) |
 | `app/services/profiling.py` | Row/column/type/missing profiling (PRD §9) |
 | `app/services/quality.py` | Issue detection and analysis readiness (PRD §10) |
 | `app/services/cleaning.py` | Label, numeric and date normalisation (PRD §11) |
@@ -47,6 +48,33 @@ salaries as `₹45,000`, and a February sales file that renames `food_sales` to
 | `app/analytics/comparison.py` | Branch-vs-branch and period-vs-period |
 | `app/analytics/problems.py` | Problem detection, fact/driver/hypothesis (PRD §21–23) |
 | `app/api/` | Routes: auth, businesses, datasets, analytics |
+
+## Reading real spreadsheets
+
+Business exports rarely put a header in cell A1. The scanner handles the shapes
+that actually arrive:
+
+| Shape | What happens |
+| --- | --- |
+| Title/banner rows above the header | Header row detected by scoring the first 25 rows; the rows above are skipped |
+| Merged title cell | Same — a merged banner never wins the header |
+| Cover sheet before the data sheet | Every sheet is scored on its detected table; the largest wins |
+| Several data sheets | Best one chosen and named in the response; the user can override with `sheet=` |
+| Totals / grand total row | Dropped, so a summary line is never counted as a transaction |
+| Repeated column headings | Kept, made unique — neither column is lost |
+| Blank spacer columns | Dropped |
+| xlsx bytes named `.xls`, or no extension at all | Recognised by file signature, not by name |
+| Amounts as `₹ 45,000.00` text | Recovered as numbers |
+| Semicolon/tab/pipe CSV, or a CSV with title lines | Delimiter detected across the body, not from the first line |
+
+Every decision is reported back on `profile.source` — sheet name, header row,
+rows skipped, totals dropped — and shown in the interface, because a wrong guess
+about the header row is otherwise invisible in the numbers.
+
+**When detection genuinely fails, the file is kept and the user is asked.** An
+unclassifiable upload is stored with its columns unmapped rather than rejected;
+confirming what the columns mean re-derives the dataset kind and brings the data
+into the analysis.
 
 ## Design decisions worth knowing
 

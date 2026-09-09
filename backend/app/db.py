@@ -4,13 +4,27 @@ from collections.abc import Iterator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.config import get_settings
 
 settings = get_settings()
 
-_connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=_connect_args, future=True)
+_is_sqlite = settings.database_url.startswith("sqlite")
+# An in-memory SQLite database lives inside one connection, so a normal pool
+# hands out connections with no tables in them. StaticPool keeps everyone on
+# the same connection.
+_is_memory = _is_sqlite and (
+    ":memory:" in settings.database_url or settings.database_url.rstrip("/").endswith("sqlite:")
+)
+
+_kwargs: dict = {}
+if _is_sqlite:
+    _kwargs["connect_args"] = {"check_same_thread": False}
+if _is_memory:
+    _kwargs["poolclass"] = StaticPool
+
+engine = create_engine(settings.database_url, future=True, **_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

@@ -45,12 +45,15 @@ def assess_file(
         return issues
 
     if entity_kind == "unknown":
+        # Not fatal: the file is kept and the user is asked what the columns mean.
+        # Once they confirm, the kind is recomputed and the data becomes active.
         issues.append(
             Issue(
-                "critical",
+                "warning",
                 "unknown_entity",
-                "We couldn't tell whether this file describes sales, employees or expenses. "
-                "Confirm the column meanings and upload again.",
+                "We couldn't tell whether this file describes sales, employees or "
+                "expenses. Confirm what the columns below mean and it will be included "
+                "in your analysis.",
             )
         )
 
@@ -75,8 +78,9 @@ def assess_file(
 
     if entity_kind == "sales" and "REVENUE" not in mapped:
         issues.append(
-            Issue("critical", "missing_revenue",
-                  "This looks like a sales file but no revenue amount could be identified.")
+            Issue("warning", "missing_revenue",
+                  "This looks like a sales file but no revenue amount could be identified. "
+                  "Confirm which column holds the sale value.")
         )
     if entity_kind == "employee" and "EMPLOYEE_COMPENSATION" not in mapped:
         issues.append(
