@@ -99,7 +99,21 @@ def compare_dimension(frames: Frames, concept: str = "BRANCH") -> dict:
         comparable = len(values) == len(per_slice) and len(values) > 1
         meta = METRICS_BY_KEY.get(key)
         ranking = None
-        if comparable and meta and meta.higher_is_better is not None:
+        note = None
+        if not comparable:
+            note = (
+                "Not comparable: this metric is unavailable for at least one "
+                f"{concept.lower()}."
+            )
+        elif meta and meta.higher_is_better is None:
+            note = "No better or worse direction for this metric."
+        elif meta and not meta.rankable:
+            note = (
+                "Shown for reference only: this is an absolute total, so the "
+                f"smallest {concept.lower()} will always be lowest. Compare the "
+                "ratio instead."
+            )
+        elif meta:
             ranking = sorted(
                 values, key=lambda n: values[n], reverse=bool(meta.higher_is_better)
             )
@@ -113,10 +127,7 @@ def compare_dimension(frames: Frames, concept: str = "BRANCH") -> dict:
                 "ranking": ranking,
                 "best": ranking[0] if ranking else None,
                 "worst": ranking[-1] if ranking else None,
-                "note": None
-                if comparable
-                else "Not comparable: this metric is unavailable for at least one "
-                f"{concept.lower()}.",
+                "note": note,
             }
         )
 

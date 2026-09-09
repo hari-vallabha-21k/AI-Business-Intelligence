@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-white text-ink antialiased;
+    font-feature-settings: 'tnum' 1;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-line bg-white p-5;
+  }
+  .btn {
+    @apply rounded-md bg-ink px-4 py-2 text-sm font-medium text-white
+           hover:bg-black disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-ghost {
+    @apply rounded-md border border-line px-3 py-1.5 text-sm hover:bg-gray-50;
+  }
+  .field {
+    @apply w-full rounded-md border border-line px-3 py-2 text-sm
+           focus:border-ink focus:outline-none;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-muted;
+  }
+  /* Figures line up column-wise when they are tabular. */
+  .num {
+    @apply text-right tabular-nums;
+  }
+}

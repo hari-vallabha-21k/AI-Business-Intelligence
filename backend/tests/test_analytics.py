@@ -218,3 +218,43 @@ def test_loss_making_branch_is_flagged():
     )
     findings = detect_branch_problems(compare_dimension(f, "BRANCH"))
     assert any(f.code == "loss_making_branch" for f in findings)
+
+
+def test_absolute_cost_totals_are_not_ranked_across_branches():
+    """The smallest branch always spends least; that is not "best"."""
+    f = frames(
+        revenue={"REVENUE": [100.0, 1000.0], "DISCOUNT": [5.0, 60.0], "BRANCH": ["Small", "Big"]},
+        pay={
+            "EMPLOYEE_COMPENSATION": [30.0, 250.0],
+            "EMPLOYEE_ID": ["e1", "e2"],
+            "BRANCH": ["Small", "Big"],
+        },
+    )
+    comparison = compare_dimension(f, "BRANCH")
+    rows = {r["key"]: r for r in comparison["metrics"]}
+
+    for key in ("total_discount", "total_employee_cost"):
+        assert rows[key]["best"] is None, f"{key} must not be ranked"
+        assert "absolute total" in rows[key]["note"]
+
+    # Size-independent metrics are still ranked, and revenue still is too.
+    assert rows["employee_cost_ratio"]["best"] == "Big"
+    assert rows["total_revenue"]["best"] == "Big"
+
+
+def test_loss_finding_is_grammatical():
+    def build(profits):
+        return frames(
+            revenue={"REVENUE": [1000.0] * len(profits), "COGS": [0.0] * len(profits),
+                     "BRANCH": list("ABCD"[: len(profits)])},
+            pay={"EMPLOYEE_COMPENSATION": profits, "EMPLOYEE_ID": ["e1", "e2", "e3", "e4"]
+                 [: len(profits)], "BRANCH": list("ABCD"[: len(profits)])},
+            expense={"OPERATING_EXPENSE": [0.0] * len(profits),
+                     "BRANCH": list("ABCD"[: len(profits)])},
+        )
+
+    one = detect_branch_problems(compare_dimension(build([1500.0, 100.0]), "BRANCH"))
+    assert "1 branch is operating at a loss" in {f.title for f in one}
+
+    two = detect_branch_problems(compare_dimension(build([1500.0, 1200.0]), "BRANCH"))
+    assert "2 branches are operating at a loss" in {f.title for f in two}

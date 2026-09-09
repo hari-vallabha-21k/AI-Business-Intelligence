@@ -177,7 +177,11 @@ def detect_branch_problems(comparison: dict) -> list[Finding]:
                     kind="fact",
                     severity="high",
                     code="loss_making_branch",
-                    title=f"{len(losers)} branch(es) are operating at a loss",
+                    title=(
+                        f"{len(losers)} branch is operating at a loss"
+                        if len(losers) == 1
+                        else f"{len(losers)} branches are operating at a loss"
+                    ),
                     detail="Operating profit is negative at " + ", ".join(sorted(losers)) + ".",
                     evidence=losers,
                     metrics=["operating_profit"],

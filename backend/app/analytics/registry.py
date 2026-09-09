@@ -60,6 +60,10 @@ class Metric:
     # do not add up to the company figure, so "who drove the change" is not a
     # question those metrics can answer.
     decomposable: bool = False
+    # Whether ranking members against each other is meaningful. An absolute cost
+    # total is not: the smallest branch always spends the least, which says
+    # nothing about how well it is run. Ratios and per-unit figures are.
+    rankable: bool = True
     description: str = ""
     inputs: tuple[str, ...] = field(default=())
 
@@ -119,6 +123,7 @@ METRICS: tuple[Metric, ...] = (
         higher_is_better=False,
         fn=lambda f, _: _sum(f, "sales", "DISCOUNT"),
         decomposable=True,
+        rankable=False,
     ),
     Metric(
         key="total_tax",
@@ -129,6 +134,7 @@ METRICS: tuple[Metric, ...] = (
         higher_is_better=None,
         fn=lambda f, _: _sum(f, "sales", "TAX"),
         decomposable=True,
+        rankable=False,
     ),
     Metric(
         key="net_revenue",
@@ -202,6 +208,7 @@ METRICS: tuple[Metric, ...] = (
         fn=lambda f, _: _sum_any(f, "employee", _PAY_CONCEPTS),
         description="Base pay plus any overtime and incentives present in the data.",
         decomposable=True,
+        rankable=False,
     ),
     Metric(
         key="average_salary",
@@ -223,6 +230,7 @@ METRICS: tuple[Metric, ...] = (
         higher_is_better=False,
         fn=lambda f, _: _sum(f, "sales", "COGS") + _sum(f, "expense", "COGS"),
         decomposable=True,
+        rankable=False,
     ),
     Metric(
         key="total_operating_expense",
@@ -233,6 +241,7 @@ METRICS: tuple[Metric, ...] = (
         higher_is_better=False,
         fn=lambda f, _: _sum(f, "expense", "OPERATING_EXPENSE"),
         decomposable=True,
+        rankable=False,
     ),
     Metric(
         key="gross_profit",
