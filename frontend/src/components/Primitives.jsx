@@ -1,4 +1,4 @@
-import { KIND_LABEL, SEVERITY_STYLE, formatMetric } from '../format'
+import { AVAILABILITY, KIND_LABEL, SEVERITY_STYLE, formatMetric } from '../format'
 
 export function Spinner({ label = 'Loading' }) {
   return <p className="py-8 text-center text-sm text-muted">{label}…</p>
@@ -27,29 +27,46 @@ export function Empty({ title, children }) {
   )
 }
 
-/** A headline figure. An unavailable metric shows why, never a zero. */
+/**
+ * A headline figure. An unavailable metric shows why, never a zero — and a
+ * figure computed from incomplete or unconfirmed data says so on its face,
+ * because a caveated number read as a clean one is worse than no number.
+ */
 export function MetricTile({ metric, currency, onInspect }) {
+  const state = AVAILABILITY[metric.availability] ?? AVAILABILITY.AVAILABLE
+
+  if (!metric.available) {
+    return (
+      <div className="card">
+        <p className="text-xs uppercase tracking-wide text-muted">{metric.label}</p>
+        <p className="mt-2 text-2xl font-semibold text-muted">Not available</p>
+        <p className="mt-2 text-xs leading-relaxed text-muted">{metric.reason}</p>
+      </div>
+    )
+  }
+
   return (
     <div className="card">
-      <p className="text-xs uppercase tracking-wide text-muted">{metric.label}</p>
-      {metric.available ? (
-        <>
-          <p className="mt-2 text-2xl font-semibold tabular-nums">
-            {formatMetric(metric.value, metric.unit, currency)}
-          </p>
-          <button
-            className="mt-2 text-xs text-muted underline underline-offset-2 hover:text-ink"
-            onClick={() => onInspect(metric)}
-          >
-            View calculation
-          </button>
-        </>
-      ) : (
-        <>
-          <p className="mt-2 text-2xl font-semibold text-muted">Not available</p>
-          <p className="mt-2 text-xs leading-relaxed text-muted">{metric.reason}</p>
-        </>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs uppercase tracking-wide text-muted">{metric.label}</p>
+        {state.label && (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${state.tone}`}>
+            {state.label}
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-2xl font-semibold tabular-nums">
+        {formatMetric(metric.value, metric.unit, currency)}
+      </p>
+      {metric.caveats?.length > 0 && (
+        <p className="mt-2 text-xs leading-relaxed text-warn">{metric.caveats[0]}</p>
       )}
+      <button
+        className="mt-2 text-xs text-muted underline underline-offset-2 hover:text-ink"
+        onClick={() => onInspect(metric)}
+      >
+        View calculation
+      </button>
     </div>
   )
 }
@@ -78,6 +95,33 @@ export function CalculationPanel({ metric, currency, onClose }) {
           <p className="label">Formula</p>
           <code className="block rounded bg-gray-50 p-3 text-sm">{metric.formula}</code>
         </div>
+
+        {metric.provenance?.length > 0 && (
+          <div className="mt-4">
+            <p className="label">Where this came from</p>
+            <ul className="divide-y divide-line rounded border border-line text-sm">
+              {metric.provenance.map((source, index) => (
+                <li key={index} className="px-3 py-2">
+                  <span className="font-medium">{source.concept}</span>{' '}
+                  <span className="text-muted">
+                    from {source.file} (v{source.version}, {source.rows?.toLocaleString()} rows
+                    {source.period_start ? `, ${source.period_start} to ${source.period_end}` : ''})
+                  </span>
+                  {source.grain && <p className="text-xs text-muted">{source.grain}</p>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {metric.caveats?.length > 0 && (
+          <div className="mt-4">
+            <p className="label">What to keep in mind</p>
+            <ul className="space-y-1 text-sm text-warn">
+              {metric.caveats.map((caveat, index) => <li key={index}>{caveat}</li>)}
+            </ul>
+          </div>
+        )}
 
         {Object.keys(metric.inputs ?? {}).length > 0 && (
           <div className="mt-4">

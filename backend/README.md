@@ -36,6 +36,11 @@ salaries as `₹45,000`, and a February sales file that renames `food_sales` to
 | --- | --- |
 | `app/semantic/concepts.py` | The canonical vocabulary (PRD §13) — 25 concepts every other module speaks in |
 | `app/semantic/engine.py` | Column → concept mapping with confidence scoring (PRD §12, §14) |
+| `app/semantic/grain.py` | What one row represents, and whether two datasets describe the same records (PRD §9) |
+| `app/semantic/classification.py` | What kind of file this is, with confidence (PRD §8) |
+| `app/semantic/resolution.py` | Canonical entities from many spellings, refusing ambiguous merges (PRD §14) |
+| `app/semantic/relationships.py` | Validated links between datasets (PRD §13) |
+| `app/services/pipeline.py` | Runs the understanding stages in order |
 | `app/services/workbook.py` | Workbook scanning — finds the sheet, the header row and the real table |
 | `app/services/parsing.py` | Upload validation and type recovery, user-facing errors (PRD §34) |
 | `app/services/profiling.py` | Row/column/type/missing profiling (PRD §9) |
@@ -47,7 +52,10 @@ salaries as `₹45,000`, and a February sales file that renames `food_sales` to
 | `app/analytics/engine.py` | Metric evaluation with dependency-traced reasons |
 | `app/analytics/comparison.py` | Branch-vs-branch and period-vs-period |
 | `app/analytics/problems.py` | Problem detection, fact/driver/hypothesis (PRD §21–23) |
-| `app/api/` | Routes: auth, businesses, datasets, analytics |
+| `app/analytics/provenance.py` | Metric caveats and source lineage (PRD §18, §29) |
+| `app/qa/pipeline.py` | Natural-language Q&A: intent → plan → calculation → evidence (PRD §28) |
+| `app/ai/interpreter.py` | The AI boundary — explanation only, over evidence only (PRD §30) |
+| `app/api/` | Routes: auth, businesses, datasets, analytics, ask, model |
 
 ## Reading real spreadsheets
 
@@ -75,6 +83,68 @@ about the header row is otherwise invisible in the numbers.
 unclassifiable upload is stored with its columns unmapped rather than rejected;
 confirming what the columns mean re-derives the dataset kind and brings the data
 into the analysis.
+
+## The data-understanding pipeline
+
+Every upload runs through the same stages before any figure is calculated:
+
+```
+parse → profile → semantic mapping → normalise → grain detection
+      → classification → entity resolution → quality → store
+      → relationship discovery
+```
+
+**Grain detection is what keeps revenue correct.** An invoice table and its line
+items describe the same money at different grains; summing both reports it
+twice. Each dataset's row key is detected (`{ORDER_ID}` = one row per order,
+`{ORDER_ID, PRODUCT}` = one row per line), and when two datasets cover the same
+identifiers *and* share a measure *and* overlap in time, only one is counted —
+reported in the response `notes`, never applied silently.
+
+**A re-uploaded file is refused, not counted twice.** Uploads carry a content
+hash; the same bytes return `409` with an explanation. Uploading with
+`replace=true` supersedes the earlier version rather than deleting it.
+
+**Ambiguity is surfaced, not guessed.** Generic column names (`amount`,
+`total`, `cost`) score below the auto-accept threshold and come back for
+confirmation. A branch spelling that could belong to two existing branches is
+raised as a question rather than merged.
+
+## Metric availability
+
+Every metric carries one of four states (PRD §18):
+
+| State | Meaning |
+| --- | --- |
+| `AVAILABLE` | Computed from complete, confirmed data |
+| `PARTIALLY_AVAILABLE` | Computed, but inputs are incomplete — caveats attached |
+| `NEEDS_CONFIRMATION` | Computed, but rests on a column meaning the user hasn't confirmed |
+| `UNAVAILABLE` | Not computed; the reason names the missing concept |
+
+Every available metric also carries `provenance` — which concept came from which
+file, version, period and grain — so any figure traces back to the upload behind
+it.
+
+## Natural-language Q&A
+
+`POST /api/businesses/{id}/ask` runs a deterministic pipeline and only then asks
+a model to write prose:
+
+```
+question → intent → metric/entity/period resolution → availability check
+        → deterministic calculation → evidence → explanation
+```
+
+The model never calculates. It receives labels, values, units, formulas,
+findings and caveats — never uploaded rows — and any reply containing a number
+absent from that evidence is discarded in favour of deterministic text. With no
+API key the system uses the deterministic explainer and remains fully
+functional; set `BI_ANTHROPIC_API_KEY` to enable the Claude explainer.
+
+When a question needs a metric the data cannot support, the answer says so:
+
+> I can't calculate operating profit from the data you've uploaded. Operating
+> profit needs Cost of goods sold, which is unavailable.
 
 ## Design decisions worth knowing
 

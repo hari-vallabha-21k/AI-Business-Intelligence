@@ -57,7 +57,7 @@ on realistic data without clicking through the UI:
 cd backend
 python scripts/generate_sample_data.py   # messy 3-branch restaurant data
 python scripts/demo.py                   # runs the whole pipeline, prints the result
-pytest                                   # 87 tests
+pytest                                   # 108 tests
 ```
 
 ## Repository
@@ -87,8 +87,12 @@ profiling → data quality → cleaning → semantic mapping → historical stor
 core KPIs → branch comparison → company-wide analysis → problem detection →
 dashboard.
 
-**V2 is not built** — natural-language Q&A, the AI interpretation layer, the
-recommendation engine and report generation ([docs/PRD.md](docs/PRD.md) §36).
-The analytics engine deliberately came first: it produces the calculated
-evidence that the AI layer will interpret, rather than asking the model to do
-arithmetic.
+**V2 is partly built** — natural-language Q&A and the AI interpretation layer
+are in place ([docs/PRD.md](docs/PRD.md) §36). The recommendation engine and
+report generation are not.
+
+The system is built for messy, heterogeneous data rather than a clean sample:
+dataset classification, row-grain detection, entity resolution, relationship
+discovery, four-state metric availability and full provenance all run before any
+figure is shown. See [backend/README.md](backend/README.md) for how that
+pipeline works.

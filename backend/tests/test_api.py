@@ -133,8 +133,10 @@ def test_confirming_a_mapping_rebuilds_records_and_is_remembered(auth_client, bu
     assert extra["concept"] == "SERVICE_CHARGE"
     assert extra["confirmed_by_user"] and not extra["needs_confirmation"]
 
-    # The next upload with the same column applies the confirmed meaning.
-    second = upload(auth_client, business["id"], df, "Sales February").json()
+    # A later upload with the same column applies the confirmed meaning. The
+    # rows differ, or the upload would be rejected as a duplicate.
+    february = df.assign(bill_no=["c", "d"], order_date=["2026-02-01", "2026-02-02"])
+    second = upload(auth_client, business["id"], february, "Sales February").json()
     remembered = next(m for m in second["mappings"] if m["source_column"] == "extra")
     assert remembered["concept"] == "SERVICE_CHARGE"
     assert not remembered["needs_confirmation"]
@@ -241,7 +243,43 @@ def test_overview_without_data_explains_itself(auth_client, business):
 
 def test_datasets_listing_shows_versions(auth_client, business, sales_df):
     upload(auth_client, business["id"], sales_df, "Sales")
-    upload(auth_client, business["id"], sales_df, "Sales")
+    corrected = sales_df.assign(food_sales=sales_df["food_sales"] * 2)
+    upload(auth_client, business["id"], corrected, "Sales")
     datasets = auth_client.get(f"/api/businesses/{business['id']}/datasets").json()
     sales = next(d for d in datasets if d["name"] == "Sales")
     assert [v["version"] for v in sales["versions"]] == [1, 2]
+
+
+def test_the_same_file_twice_is_refused_not_double_counted(auth_client, business, sales_df):
+    """PRD sec. 23: a re-upload must never inflate the totals."""
+    first = upload(auth_client, business["id"], sales_df, "Sales")
+    assert first.status_code == 201
+    before = auth_client.get(f"/api/businesses/{business['id']}/overview").json()
+
+    again = upload(auth_client, business["id"], sales_df, "Sales")
+    assert again.status_code == 409
+    assert "already been uploaded" in again.json()["detail"]
+
+    after = auth_client.get(f"/api/businesses/{business['id']}/overview").json()
+    assert (
+        after["metrics"]["total_revenue"]["value"]
+        == before["metrics"]["total_revenue"]["value"]
+    )
+
+
+def test_replacing_an_upload_supersedes_it_rather_than_adding(auth_client, business, sales_df):
+    upload(auth_client, business["id"], sales_df, "Sales")
+    before = auth_client.get(f"/api/businesses/{business['id']}/overview").json()
+
+    replaced = upload(auth_client, business["id"], sales_df, "Sales", replace="true")
+    assert replaced.status_code == 201
+
+    after = auth_client.get(f"/api/businesses/{business['id']}/overview").json()
+    assert (
+        after["metrics"]["total_revenue"]["value"]
+        == before["metrics"]["total_revenue"]["value"]
+    )
+    # The superseded version is kept, not deleted.
+    datasets = auth_client.get(f"/api/businesses/{business['id']}/datasets").json()
+    sales = next(d for d in datasets if d["name"] == "Sales")
+    assert len(sales["versions"]) == 2

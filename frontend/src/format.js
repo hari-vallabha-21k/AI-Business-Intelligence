@@ -34,6 +34,21 @@ export const SEVERITY_STYLE = {
   low: 'border-line bg-gray-50 text-muted',
 }
 
+// How far a figure can be trusted. AVAILABLE is unremarkable and shows nothing;
+// the others always carry their reason.
+export const AVAILABILITY = {
+  AVAILABLE: { label: null, tone: '' },
+  PARTIALLY_AVAILABLE: {
+    label: 'Incomplete data',
+    tone: 'bg-warn/10 text-warn',
+  },
+  NEEDS_CONFIRMATION: {
+    label: 'Needs your confirmation',
+    tone: 'bg-warn/10 text-warn',
+  },
+  UNAVAILABLE: { label: 'Not available', tone: 'bg-gray-100 text-muted' },
+}
+
 export const KIND_LABEL = {
   fact: 'Fact',
   driver: 'Supported driver',

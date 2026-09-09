@@ -73,6 +73,10 @@ class MappingProposal:
         return self.confidence != "high"
 
 
+# A weak synonym can never on its own exceed the confirmation threshold.
+WEAK_SYNONYM_CEILING = 0.62
+
+
 def _name_score(col_norm: str, col_tokens: set[str], c: Concept) -> tuple[float, str]:
     """Match the column name against a concept's vocabulary."""
     best, why = 0.0, ""
@@ -96,6 +100,14 @@ def _name_score(col_norm: str, col_tokens: set[str], c: Concept) -> tuple[float,
             score = 0.6
             if score > best:
                 best, why = score, f"name resembles '{syn}'"
+
+    # Generic words only get the column as far as "please confirm".
+    for weak in c.weak_synonyms:
+        weak_norm = normalize(weak)
+        if col_norm == weak_norm or weak_norm in col_tokens:
+            score = WEAK_SYNONYM_CEILING
+            if score > best:
+                best, why = score, f"'{weak}' is a generic name that often means {c.label}"
     return best, why
 
 

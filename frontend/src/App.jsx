@@ -2,13 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, clearToken, getToken } from './api'
 import Auth from './components/Auth'
 import BusinessSetup from './components/BusinessSetup'
+import Ask from './components/Ask'
 import Dashboard, { PeriodComparison } from './components/Dashboard'
+import DataModel from './components/DataModel'
 import Upload from './components/Upload'
 import { Empty, ErrorNote, Spinner } from './components/Primitives'
 
 const TABS = [
   ['dashboard', 'Dashboard'],
+  ['ask', 'Ask your data'],
   ['periods', 'Compare periods'],
+  ['model', 'What we understood'],
   ['upload', 'Upload data'],
 ]
 
@@ -122,7 +126,9 @@ export default function App() {
         {tab === 'dashboard' && (
           <Dashboard key={refreshKey} business={business} period={period} />
         )}
+        {tab === 'ask' && <Ask business={business} />}
         {tab === 'periods' && <PeriodComparison business={business} />}
+        {tab === 'model' && <DataModel key={refreshKey} business={business} />}
         {tab === 'upload' && (
           <Upload
             business={business}

@@ -44,6 +44,10 @@ class EntityKind(str, enum.Enum):
     SALES = "sales"
     EMPLOYEE = "employee"
     EXPENSE = "expense"
+    # Reference data (branch, product, customer and department masters). Stored
+    # because it feeds entity resolution and relationship discovery, but never
+    # summed: a branch list is not revenue.
+    REFERENCE = "reference"
     UNKNOWN = "unknown"
 
 
@@ -147,6 +151,18 @@ class DatasetVersion(Base):
 
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     column_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Identity of the upload. content_hash catches the same file uploaded twice;
+    # schema_hash catches a re-upload whose columns changed (PRD sec. 23).
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    schema_hash: Mapped[str | None] = mapped_column(String(64))
+    # Set when a later version replaces this one, so analytics reads one of them.
+    superseded_by_id: Mapped[int | None] = mapped_column(Integer)
+
+    # What the file is, and what one row of it means (PRD sec. 8-9).
+    classification: Mapped[dict] = mapped_column(JSON, default=dict)
+    grain: Mapped[dict] = mapped_column(JSON, default=dict)
+
     profile: Mapped[dict] = mapped_column(JSON, default=dict)
     cleaning_log: Mapped[list] = mapped_column(JSON, default=list)
     # Rows keyed by canonical concept; the raw row is kept alongside so the
@@ -199,6 +215,81 @@ class MappingMemory(Base):
     source_column: Mapped[str] = mapped_column(String(255))
     entity_kind: Mapped[EntityKind] = mapped_column(Enum(EntityKind), default=EntityKind.UNKNOWN)
     concept: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Entity(Base):
+    """A canonical business entity -- one branch, one department, one employee.
+
+    Raw spellings live in ``EntityAlias``; this row is the thing they refer to.
+    """
+
+    __tablename__ = "entities"
+    __table_args__ = (
+        UniqueConstraint("business_id", "entity_type", "entity_key", name="uq_entity_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"), index=True
+    )
+    entity_type: Mapped[str] = mapped_column(String(32), index=True)  # BRANCH, DEPARTMENT...
+    entity_key: Mapped[str] = mapped_column(String(255))
+    display_name: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    aliases: Mapped[list["EntityAlias"]] = relationship(
+        back_populates="entity", cascade="all, delete-orphan"
+    )
+
+
+class EntityAlias(Base):
+    """A raw value seen in a file, and the entity it was resolved to.
+
+    The raw value is never overwritten in the data; this table records the link
+    so that resolution stays auditable and reversible (Rule 9).
+    """
+
+    __tablename__ = "entity_aliases"
+    __table_args__ = (
+        UniqueConstraint("entity_id", "raw_value", name="uq_alias_value"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), index=True
+    )
+    raw_value: Mapped[str] = mapped_column(String(255))
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    confirmed_by_user: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    entity: Mapped[Entity] = relationship(back_populates="aliases")
+
+
+class DatasetRelationship(Base):
+    """A validated link between two dataset versions (PRD sec. 13)."""
+
+    __tablename__ = "dataset_relationships"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"), index=True
+    )
+    from_version_id: Mapped[int] = mapped_column(
+        ForeignKey("dataset_versions.id", ondelete="CASCADE")
+    )
+    from_column: Mapped[str] = mapped_column(String(255))
+    to_version_id: Mapped[int] = mapped_column(
+        ForeignKey("dataset_versions.id", ondelete="CASCADE")
+    )
+    to_column: Mapped[str] = mapped_column(String(255))
+    kind: Mapped[str] = mapped_column(String(32))
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    overlap: Mapped[float] = mapped_column(Float, default=0.0)
+    orphan_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    is_safe_join: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

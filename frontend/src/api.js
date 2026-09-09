@@ -89,6 +89,9 @@ export const api = {
   compareBranches: (id, params) => request(`/api/businesses/${id}/compare/branches`, { params }),
   comparePeriods: (id, params) => request(`/api/businesses/${id}/compare/periods`, { params }),
   problems: (id, params) => request(`/api/businesses/${id}/problems`, { params }),
+  ask: (id, question) =>
+    request(`/api/businesses/${id}/ask`, { method: 'POST', body: { question } }),
+  model: (id) => request(`/api/businesses/${id}/model`),
 }
 
 export { ApiError }

@@ -99,7 +99,26 @@ def assess_file(
             )
         )
 
+    # Concepts where even a few blanks silently understate a total.
+    critical = {
+        p.source_column: p.concept
+        for p in proposals
+        if p.concept in {"EMPLOYEE_COMPENSATION", "REVENUE", "OPERATING_EXPENSE", "COGS"}
+    }
     for col in profile["columns"]:
+        if col["name"] in critical and 0 < col["missing"]:
+            issues.append(
+                Issue(
+                    "warning",
+                    "missing_values",
+                    f"{col['missing']:,} rows have no value in '{col['name']}' "
+                    f"({label(critical[col['name']])}). Those rows contribute nothing to "
+                    "the total, which is therefore understated.",
+                    column_name=col["name"],
+                    details={"missing": col["missing"], "concept": critical[col["name"]]},
+                )
+            )
+            continue
         if col["missing_pct"] >= MISSING_WARN_PCT:
             issues.append(
                 Issue(
@@ -134,6 +153,8 @@ def assess_file(
                 )
             )
 
+    issues.extend(_transaction_issues(df, proposals, entity_kind))
+
     # Negative money is legitimate (refunds), but negative pay is a data error.
     for p in proposals:
         if p.concept in {"EMPLOYEE_COMPENSATION", "QUANTITY"} and p.source_column in df.columns:
@@ -151,6 +172,80 @@ def assess_file(
                     )
                 )
 
+    return issues
+
+
+def _transaction_issues(
+    df: pd.DataFrame, proposals: list[MappingProposal], entity_kind: str
+) -> list[Issue]:
+    """Refunds, reversals and repeated invoice numbers.
+
+    A negative sale is normal business, not a data error -- but it changes what
+    a revenue total means, and a reversal sharing its original's invoice number
+    will look like a duplicate to anything that counts orders. Both are
+    reported so the figures are read correctly.
+    """
+    if entity_kind != "sales":
+        return []
+
+    issues: list[Issue] = []
+    revenue_column = next(
+        (p.source_column for p in proposals if p.concept == "REVENUE"), None
+    )
+    order_column = next((p.source_column for p in proposals if p.concept == "ORDER_ID"), None)
+
+    if revenue_column and revenue_column in df.columns:
+        values = pd.to_numeric(df[revenue_column], errors="coerce")
+        negatives = int((values < 0).sum())
+        if negatives:
+            refunded = float(values[values < 0].sum())
+            issues.append(
+                Issue(
+                    "info",
+                    "refunds_present",
+                    f"{negatives:,} rows have a negative amount totalling {refunded:,.0f}. "
+                    "These are treated as refunds and reduce revenue, rather than being "
+                    "dropped.",
+                    column_name=revenue_column,
+                    details={"count": negatives, "total": refunded},
+                )
+            )
+
+            if order_column and order_column in df.columns:
+                # A reversal that reuses the original invoice number is a pair,
+                # not a duplicate; counting distinct orders would merge them.
+                negative_orders = set(df.loc[values < 0, order_column].dropna().astype(str))
+                positive_orders = set(df.loc[values > 0, order_column].dropna().astype(str))
+                paired = negative_orders & positive_orders
+                if paired:
+                    issues.append(
+                        Issue(
+                            "warning",
+                            "reversal_pairs",
+                            f"{len(paired):,} invoice number(s) appear as both a sale and a "
+                            "refund. Order counts treat each pair as one order.",
+                            column_name=order_column,
+                            details={"count": len(paired)},
+                        )
+                    )
+
+    if order_column and order_column in df.columns:
+        counts = df[order_column].dropna().astype(str).value_counts()
+        repeated = int((counts > 1).sum())
+        if repeated and revenue_column:
+            values = pd.to_numeric(df[revenue_column], errors="coerce")
+            if not (values < 0).any():
+                issues.append(
+                    Issue(
+                        "warning",
+                        "duplicate_invoice_ids",
+                        f"{repeated:,} invoice number(s) appear on more than one row. If "
+                        "these are line items this is expected; if not, revenue may be "
+                        "counted twice.",
+                        column_name=order_column,
+                        details={"count": repeated},
+                    )
+                )
     return issues
 
 

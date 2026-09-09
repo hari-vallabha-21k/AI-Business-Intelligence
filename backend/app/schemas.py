@@ -109,6 +109,10 @@ class UploadResult(BaseModel):
     requires_confirmation: bool = False
 
 
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+
+
 class AnalysisScope(BaseModel):
     branches: list[str] | None = None
     period_start: date | None = None

@@ -9,6 +9,7 @@ and the "why can't I see profit?" answer are built from.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 import pandas as pd
 
@@ -17,16 +18,42 @@ from app.analytics.registry import METRICS, METRICS_BY_KEY, Frames, Metric
 ENTITY_KINDS = ("sales", "employee", "expense")
 
 
+class Availability(str, Enum):
+    """How far a metric can be trusted (PRD sec. 18).
+
+    The distinction that matters is between "we cannot compute this" and "we
+    computed it from incomplete data" -- the second produces a number, and a
+    number without its caveat is worse than no number.
+    """
+
+    AVAILABLE = "AVAILABLE"
+    PARTIALLY_AVAILABLE = "PARTIALLY_AVAILABLE"
+    NEEDS_CONFIRMATION = "NEEDS_CONFIRMATION"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
 @dataclass
 class MetricResult:
     key: str
     label: str
     unit: str
     value: float | None
-    available: bool
+    availability: Availability
     formula: str
     reason: str | None = None
     inputs: dict[str, float] = field(default_factory=dict)
+    caveats: list[str] = field(default_factory=list)
+    provenance: list[dict] = field(default_factory=list)
+
+    @property
+    def available(self) -> bool:
+        """A value exists. Callers that must not use a caveated number should
+        check ``availability`` instead."""
+        return self.value is not None
+
+    @property
+    def is_trustworthy(self) -> bool:
+        return self.availability is Availability.AVAILABLE
 
     def as_dict(self) -> dict:
         return {
@@ -35,9 +62,12 @@ class MetricResult:
             "unit": self.unit,
             "value": None if self.value is None else round(self.value, 4),
             "available": self.available,
+            "availability": self.availability.value,
             "formula": self.formula,
             "reason": self.reason,
+            "caveats": self.caveats,
             "inputs": {k: round(v, 4) for k, v in self.inputs.items()},
+            "provenance": self.provenance,
         }
 
 
@@ -101,8 +131,19 @@ def resolve_availability(available: dict[str, set[str]]) -> dict[str, str | None
     return reasons
 
 
-def evaluate(frames: Frames, keys: list[str] | None = None) -> dict[str, MetricResult]:
-    """Compute every metric the data supports over the given frames."""
+def evaluate(
+    frames: Frames,
+    keys: list[str] | None = None,
+    quality: dict[str, list[str]] | None = None,
+    sources: dict[str, list[dict]] | None = None,
+) -> dict[str, MetricResult]:
+    """Compute every metric the data supports over the given frames.
+
+    ``quality`` carries per-metric caveats (incomplete inputs, unconfirmed
+    mappings); ``sources`` carries provenance rows. Both are supplied by the
+    layer that knows where the frames came from, so this module stays a pure
+    calculator.
+    """
     available = available_concepts(frames)
     reasons = resolve_availability(available)
     computed: dict[str, float] = {}
@@ -114,7 +155,7 @@ def evaluate(frames: Frames, keys: list[str] | None = None) -> dict[str, MetricR
             label=metric.label,
             unit=metric.unit,
             value=None,
-            available=False,
+            availability=Availability.UNAVAILABLE,
             formula=metric.formula,
             reason=reason,
         )
@@ -141,14 +182,31 @@ def evaluate(frames: Frames, keys: list[str] | None = None) -> dict[str, MetricR
 
         value = float(value)
         computed[metric.key] = value
+
+        # A computed value is not automatically a trustworthy one: it may rest
+        # on caveated inputs, unconfirmed column meanings or incomplete data.
+        caveats = list(quality.get(metric.key, [])) if quality else []
+        for dep in metric.depends_on:
+            dep_result = results.get(dep)
+            if dep_result is not None:
+                caveats.extend(dep_result.caveats)
+
+        availability = Availability.AVAILABLE
+        if any(c.startswith("CONFIRM:") for c in caveats):
+            availability = Availability.NEEDS_CONFIRMATION
+        elif caveats:
+            availability = Availability.PARTIALLY_AVAILABLE
+
         results[metric.key] = MetricResult(
             key=metric.key,
             label=metric.label,
             unit=metric.unit,
             value=value,
-            available=True,
+            availability=availability,
             formula=metric.formula,
             inputs={dep: computed[dep] for dep in metric.depends_on if dep in computed},
+            caveats=sorted(set(c.removeprefix("CONFIRM:") for c in caveats)),
+            provenance=list(sources.get(metric.key, [])) if sources else [],
         )
 
     if keys:

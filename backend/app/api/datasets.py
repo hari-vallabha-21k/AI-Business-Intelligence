@@ -16,7 +16,10 @@ from app.models import (
     Business,
     Confidence,
     Dataset,
+    DatasetRelationship,
     DatasetVersion,
+    Entity,
+    EntityAlias,
     EntityKind,
     MappingMemory,
     QualityIssue,
@@ -27,7 +30,9 @@ from app.models import (
 from app.schemas import MappingOut, MappingUpdateBatch, UploadResult
 from app.semantic.concepts import CONCEPTS
 from app.semantic.engine import MappingProposal, detect_entity_kind, map_dataframe
-from app.services.ingest import build_records
+from app.semantic.relationships import discover
+from app.services import pipeline
+from app.services.ingest import build_records, records_to_frame
 from app.services.layer import known_concepts, load_mapping_memory
 from app.services.parsing import FileError, parse_upload
 from app.services.profiling import profile_dataframe
@@ -59,30 +64,56 @@ async def upload_dataset(
     dataset_name: str | None = Form(None),
     branch: str | None = Form(None),
     sheet: str | None = Form(None),
+    replace: bool = Form(False),
     period_start: date | None = Form(None),
     period_end: date | None = Form(None),
     business: Business = Depends(get_owned_business),
     db: Session = Depends(get_db),
 ) -> UploadResult:
-    """Run the full pipeline: parse, profile, map, assess, clean, store."""
+    """Run the understanding pipeline, then store the result (PRD sec. 4)."""
     content = await file.read()
     try:
         df, parse_report = parse_upload(file.filename or "upload", content, sheet=sheet)
     except FileError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    profile, signals = profile_dataframe(df)
-    # Record which sheet and header row were used so the user can correct us.
-    profile["source"] = parse_report.as_dict()
-    # First pass without memory to learn the kind, then with this business's
-    # confirmed mappings applied.
-    kind, _ = map_dataframe(df, signals)
-    memory = load_mapping_memory(db, business.id, kind)
-    kind, proposals = map_dataframe(df, signals, memory=memory)
+    # A file uploaded twice must not be counted twice (PRD sec. 23).
+    digest = pipeline.content_hash(content)
+    duplicate = db.scalar(
+        select(DatasetVersion)
+        .join(Dataset, Dataset.id == DatasetVersion.dataset_id)
+        .where(
+            Dataset.business_id == business.id,
+            DatasetVersion.content_hash == digest,
+            DatasetVersion.superseded_by_id.is_(None),
+        )
+    )
+    if duplicate is not None and not replace:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This file has already been uploaded as '{duplicate.filename}' "
+                f"(version {duplicate.version}), so it was not added again and your totals "
+                "stay correct. Re-upload with 'replace' selected if you meant to reload it."
+            ),
+        )
 
-    issues = assess_file(df, profile, proposals, kind)
-    for note in parse_report.notes:
-        issues.append(_scan_note(note))
+    # The first mapping pass only establishes what kind of file this is, so the
+    # right remembered mappings can be applied on the real pass.
+    provisional_kind = map_dataframe(df, profile_dataframe(df)[1])[0]
+    result = pipeline.run(
+        df,
+        content,
+        file.filename or "upload",
+        parse_report=parse_report,
+        memory=load_mapping_memory(db, business.id, provisional_kind),
+        default_branch=branch,
+        known_entities=_known_entities(db, business.id),
+    )
+
+    kind = result.classification.entity_kind
+    profile, proposals = result.profile, result.proposals
+    issues = list(result.issues) + [_scan_note(note) for note in parse_report.notes]
 
     blocking = [i for i in issues if i.severity == "critical"]
     if blocking:
@@ -93,19 +124,17 @@ async def upload_dataset(
         {p.concept for p in proposals if p.concept} - previously_seen
     ) if previously_seen else []
 
-    records, cleaning_log, derived_start, derived_end = build_records(df, proposals, branch)
-
+    records = result.records
     # Branches found in the file join the business's branch list, reconciled
     # against branches already registered under a different spelling.
     for name in {r["BRANCH"] for r in records if r.get("BRANCH")}:
         ensure_branch(db, business, str(name))
+    _persist_entities(db, business.id, result)
 
-    resolved_start = period_start or derived_start
-    resolved_end = period_end or derived_end
+    resolved_start = period_start or result.period_start
+    resolved_end = period_end or result.period_end
     if resolved_start is None or resolved_end is None:
-        issues.append(
-            _period_issue(file.filename or "This file")
-        )
+        issues.append(_period_issue(file.filename or "This file"))
 
     dataset = _get_or_create_dataset(db, business, dataset_name or file.filename or "Dataset", kind)
     version = DatasetVersion(
@@ -117,12 +146,21 @@ async def upload_dataset(
         period_end=resolved_end,
         row_count=profile["row_count"],
         column_count=profile["column_count"],
+        content_hash=digest,
+        schema_hash=result.schema_hash,
+        classification=result.classification.as_dict(),
+        grain=result.grain.as_dict(),
         profile=profile,
-        cleaning_log=cleaning_log,
+        cleaning_log=result.cleaning_log,
         records=records,
     )
     db.add(version)
     db.flush()
+
+    # A replacement supersedes the previous upload rather than deleting it,
+    # so the earlier figures remain traceable (Rule 9).
+    if duplicate is not None and replace:
+        duplicate.superseded_by_id = version.id
 
     for proposal in proposals:
         db.add(_mapping_row(version.id, proposal))
@@ -140,7 +178,112 @@ async def upload_dataset(
     db.commit()
     db.refresh(version)
 
+    _discover_relationships(db, business.id, version)
+    db.commit()
+    db.refresh(version)
+
     return _upload_result(version, new_concepts)
+
+
+def _known_entities(db: Session, business_id: int) -> dict[str, dict[str, str]]:
+    """Canonical entities already known for this business, for resolution."""
+    known: dict[str, dict[str, str]] = {}
+    for entity in db.scalars(select(Entity).where(Entity.business_id == business_id)):
+        known.setdefault(entity.entity_type, {})[entity.entity_key] = entity.display_name
+    return known
+
+
+def _persist_entities(db: Session, business_id: int, result) -> None:
+    """Record resolved entities and their raw spellings.
+
+    Ambiguous values are deliberately not written: they are raised as quality
+    issues for the user to settle, because merging the wrong two branches is
+    worse than leaving them separate (PRD sec. 14).
+    """
+    for entity_type, resolutions in result.resolutions.items():
+        for resolution in resolutions:
+            if resolution.needs_user or resolution.entity_key is None:
+                continue
+            entity = db.scalar(
+                select(Entity).where(
+                    Entity.business_id == business_id,
+                    Entity.entity_type == entity_type,
+                    Entity.entity_key == resolution.entity_key,
+                )
+            )
+            if entity is None:
+                entity = Entity(
+                    business_id=business_id,
+                    entity_type=entity_type,
+                    entity_key=resolution.entity_key,
+                    display_name=resolution.display_name or resolution.raw_value,
+                )
+                db.add(entity)
+                db.flush()
+
+            exists = db.scalar(
+                select(EntityAlias).where(
+                    EntityAlias.entity_id == entity.id,
+                    EntityAlias.raw_value == resolution.raw_value,
+                )
+            )
+            if exists is None:
+                db.add(
+                    EntityAlias(
+                        entity_id=entity.id,
+                        raw_value=resolution.raw_value,
+                        confidence=resolution.confidence,
+                        reason=resolution.reason,
+                    )
+                )
+
+
+def _discover_relationships(db: Session, business_id: int, version: DatasetVersion) -> None:
+    """Validate links between this upload and the datasets already present."""
+    others = db.scalars(
+        select(DatasetVersion)
+        .join(Dataset, Dataset.id == DatasetVersion.dataset_id)
+        .where(
+            Dataset.business_id == business_id,
+            DatasetVersion.id != version.id,
+            DatasetVersion.superseded_by_id.is_(None),
+        )
+    ).all()
+    if not others:
+        return
+
+    frames = {str(version.id): records_to_frame(version.records)}
+    kinds = {str(version.id): version.entity_kind}
+    for other in others:
+        if other.records:
+            frames[str(other.id)] = records_to_frame(other.records)
+            kinds[str(other.id)] = other.entity_kind
+    if len(frames) < 2:
+        return
+
+    for rel in discover(frames):
+        # Only store links that involve the upload just made.
+        if str(version.id) not in (rel.from_dataset, rel.to_dataset):
+            continue
+        # Two files of the same kind sharing an identifier are the same entity
+        # observed twice, not a relationship to join on.
+        if kinds.get(rel.from_dataset) == kinds.get(rel.to_dataset):
+            continue
+        db.add(
+            DatasetRelationship(
+                business_id=business_id,
+                from_version_id=int(rel.from_dataset),
+                from_column=rel.from_column,
+                to_version_id=int(rel.to_dataset),
+                to_column=rel.to_column,
+                kind=rel.kind,
+                confidence=rel.confidence,
+                overlap=rel.overlap,
+                orphan_rate=rel.orphan_rate,
+                is_safe_join=rel.is_safe_join,
+                reason=rel.reason,
+            )
+        )
 
 
 def _scan_note(message: str):

@@ -27,6 +27,10 @@ class Concept:
     synonyms: tuple[str, ...] = ()
     # Concepts only proposed for datasets of these kinds ("" = any).
     entity_hints: tuple[str, ...] = ()
+    # Generic words that point at this concept but are not evidence on their own.
+    # "amount" could be revenue, an expense or a salary, so it scores low enough
+    # to require confirmation rather than being assumed (PRD sec. 12).
+    weak_synonyms: tuple[str, ...] = ()
     additive: bool = False
     description: str = ""
     value_hints: tuple[str, ...] = field(default=(), repr=False)
@@ -39,8 +43,18 @@ _CONCEPTS: tuple[Concept, ...] = (
         "BRANCH",
         Role.DIMENSION,
         "Branch",
-        ("branch", "branch_name", "location", "store", "outlet", "site", "unit", "restaurant"),
+        ("branch", "branch_name", "location", "store", "store_name", "outlet",
+         "outlet_name", "site", "unit", "restaurant", "loc"),
+        weak_synonyms=("place", "region", "area", "city"),
         description="Physical location the row belongs to.",
+    ),
+    Concept(
+        "BRANCH_CODE",
+        Role.IDENTIFIER,
+        "Branch code",
+        ("branch_code", "store_code", "outlet_code", "branch_id", "store_id", "outlet_id",
+         "site_code", "location_code"),
+        description="A code standing for a branch, used to link datasets together.",
     ),
     Concept(
         "DEPARTMENT",
@@ -59,7 +73,8 @@ _CONCEPTS: tuple[Concept, ...] = (
         "EMPLOYEE_ID",
         Role.IDENTIFIER,
         "Employee ID",
-        ("employee_id", "emp_id", "staff_id", "empid", "employee_code", "payroll_id"),
+        ("employee_id", "emp_id", "staff_id", "empid", "employee_code", "payroll_id",
+         "emp_code", "staff_code", "employee_number", "emp_no"),
         entity_hints=("employee",),
     ),
     Concept(
@@ -93,7 +108,8 @@ _CONCEPTS: tuple[Concept, ...] = (
         "ORDER_ID",
         Role.IDENTIFIER,
         "Order",
-        ("order_id", "bill_no", "bill_number", "invoice_no", "invoice_id", "ticket_id", "order_no"),
+        ("order_id", "bill_no", "bill_number", "invoice_no", "invoice_id", "ticket_id",
+         "order_no", "invoice_number", "bill_id", "receipt_no", "txn_id", "transaction_id"),
         entity_hints=("sales",),
     ),
     Concept(
@@ -123,7 +139,12 @@ _CONCEPTS: tuple[Concept, ...] = (
         Role.MEASURE,
         "Revenue",
         ("revenue", "sales", "total_sales", "sales_amount", "food_sales", "food_revenue",
-         "net_sales", "gross_sales", "amount", "bill_amount", "total", "turnover", "sale_value"),
+         "net_sales", "gross_sales", "bill_amount", "turnover", "sale_value", "sales_value",
+         "invoice_amount", "invoice_total", "line_amount", "line_total", "net_amount",
+         "gross_amount", "revenue_amount"),
+        # Deliberately weak: "amount" and "total" appear in expense and payroll
+        # files just as often as in sales.
+        weak_synonyms=("amount", "total", "value", "price", "amt"),
         entity_hints=("sales",),
         additive=True,
         description="Money billed to customers before or after tax depending on source.",
@@ -180,8 +201,9 @@ _CONCEPTS: tuple[Concept, ...] = (
         "OPERATING_EXPENSE",
         Role.MEASURE,
         "Operating expense",
-        ("expense", "expenses", "operating_expense", "opex", "cost", "amount_spent",
-         "expense_amount", "overhead", "rent", "utilities"),
+        ("expense", "expenses", "operating_expense", "opex", "amount_spent",
+         "expense_amount", "overhead", "rent", "utilities", "spend", "spent"),
+        weak_synonyms=("cost", "amount", "total", "value"),
         entity_hints=("expense",),
         additive=True,
     ),
@@ -190,7 +212,9 @@ _CONCEPTS: tuple[Concept, ...] = (
         Role.MEASURE,
         "Employee compensation",
         ("salary", "monthly_salary", "monthly_pay", "pay", "wage", "wages", "ctc", "basic_pay",
-         "gross_pay", "compensation", "net_pay", "payroll"),
+         "gross_pay", "compensation", "net_pay", "payroll", "salary_amount", "gross_salary",
+         "net_salary", "basic"),
+        weak_synonyms=("amount", "total", "cost"),
         entity_hints=("employee",),
         additive=True,
         description="Base pay per employee for the period.",
